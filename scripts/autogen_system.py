@@ -7,8 +7,16 @@ import uuid
 import hashlib
 import re
 import os
+import sys
+from pathlib import Path
 from dotenv import load_dotenv
-from mas_security import (
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+BACKEND_DIR = PROJECT_ROOT / "backend"
+if str(BACKEND_DIR) not in sys.path:
+    sys.path.insert(0, str(BACKEND_DIR))
+
+from app.security.cata_log import (
     compute_event_hash,
     enrich_event_security,
     init_security_state,
@@ -25,8 +33,10 @@ except Exception as e:
 
 # --- 1. 全局上下文与配置 ---
 
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-LOG_PATH = os.path.join(SCRIPT_DIR, f"autogen_trace_{datetime.now().strftime('%Y%m%d_%H%M%S')}.jsonl")
+SCRIPT_DIR = Path(__file__).resolve().parent
+LOG_DIR = PROJECT_ROOT / "backend" / "logs"
+LOG_DIR.mkdir(parents=True, exist_ok=True)
+LOG_PATH = str(LOG_DIR / f"autogen_trace_{datetime.now().strftime('%Y%m%d_%H%M%S')}.jsonl")
 
 
 def _get_env_first(*names: str, default: str = "") -> str:
@@ -41,7 +51,9 @@ _AMAP_API_KEY_OVERRIDE = _get_env_first("AMAP_API_KEY", "AMAP_MAPS_API_KEY")
 _OPENAI_API_KEY_OVERRIDE = _get_env_first("OPENAI_API_KEY", "LLM_API_KEY")
 _BASE_URL_OVERRIDE = _get_env_first("OPENAI_BASE_URL", "LLM_BASE_URL", default="https://api.deepseek.com/v1")
 _MODEL_OVERRIDE = _get_env_first("OPENAI_MODEL", "LLM_MODEL_ID", default="deepseek-chat")
-HOTELS_FILE_PATH = os.path.join(SCRIPT_DIR, "hotels_full.md")
+HOTELS_FILE_PATH = str(PROJECT_ROOT / "scripts" / "data" / "hotels_full.md")
+if not os.path.exists(HOTELS_FILE_PATH):
+    HOTELS_FILE_PATH = str(PROJECT_ROOT / "hotels_full.md")
 
 # 测试固定参数（北京）
 TEST_CITY = "北京"

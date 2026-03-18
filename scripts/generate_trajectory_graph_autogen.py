@@ -1,14 +1,21 @@
 import json
+import glob
 import os
 import sys
 from datetime import datetime
+from pathlib import Path
 from typing import Dict, List, Tuple, Any
 
 import matplotlib.pyplot as plt
 import networkx as nx
 from matplotlib.lines import Line2D
 
-from mas_security import analyze_event_sequence
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+BACKEND_DIR = PROJECT_ROOT / "backend"
+if str(BACKEND_DIR) not in sys.path:
+    sys.path.insert(0, str(BACKEND_DIR))
+
+from app.security.cata_log import analyze_event_sequence
 
 
 def _risk_color_and_badge(event: Dict[str, Any], default_color: str) -> Tuple[str, str]:
@@ -583,26 +590,33 @@ def save_security_report(
     print(f"Attack chain text saved to: {chain_txt_path}")
 
 
-# ================= 配置区域 =================
-# 在这里显式指定要分析的日志文件
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-LOG_FILE_TO_ANALYZE = os.path.join(SCRIPT_DIR, "autogen_trace_20260316_145652.jsonl")
+def _resolve_log_file_to_analyze() -> str:
+    """Resolve the input log file from env or the latest backend log."""
+    explicit_path = os.environ.get("LOG_FILE_TO_ANALYZE", "").strip()
+    if explicit_path:
+        return explicit_path
+
+    log_dir = PROJECT_ROOT / "backend" / "logs"
+    candidates = sorted(glob.glob(str(log_dir / "autogen_trace_*.jsonl")))
+    return candidates[-1] if candidates else ""
 
 
 if __name__ == "__main__":
-    if not LOG_FILE_TO_ANALYZE:
-        print("Error: LOG_FILE_TO_ANALYZE is empty.")
+    log_file_to_analyze = _resolve_log_file_to_analyze()
+    if not log_file_to_analyze:
+        print("Error: no log file found. Set LOG_FILE_TO_ANALYZE or generate a backend/logs trace first.")
         sys.exit(1)
 
-    log_file = os.path.abspath(LOG_FILE_TO_ANALYZE)
+    log_file = os.path.abspath(log_file_to_analyze)
     print(f"Using configured log file: {log_file}")
 
     log_basename = os.path.splitext(os.path.basename(log_file))[0]
     generate_time = datetime.now().strftime("%Y%m%d_%H%M%S")
 
-    base_dir = SCRIPT_DIR
+    base_dir = PROJECT_ROOT / "scripts" / "output"
+    os.makedirs(base_dir, exist_ok=True)
     output_folder_name = f"trajectory_output_{generate_time}_{log_basename}"
-    output_dir = os.path.join(base_dir, output_folder_name)
+    output_dir = os.path.join(str(base_dir), output_folder_name)
 
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)

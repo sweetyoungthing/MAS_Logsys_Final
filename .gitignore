@@ -52,6 +52,7 @@ backend/memory/traces/
 backend/data/trip_plans/
 autogen_trace_*.jsonl
 test_trace.jsonl
+scripts/output/
 
 # Generated analysis artifacts
 security_eval_*.json

@@ -1,3 +1,5 @@
+"""CATA-Log security analysis engine kept for script-based security workflows."""
+
 import hashlib
 import json
 import math
@@ -304,7 +306,7 @@ def get_method_config() -> Dict[str, Any]:
     file_defaults = _load_project_openai_defaults()
     openai_cfg = cfg.setdefault("pi_detector", {}).setdefault("openai", {})
 
-    # Project-level defaults: if autogen_system.py has credentials, default to OpenAI-compatible detector.
+    # Project-level defaults: if environment variables are configured, default to an OpenAI-compatible detector.
     if file_defaults.get("api_key"):
         cfg.setdefault("pi_detector", {})["name"] = "openai"
         openai_cfg["api_key"] = file_defaults.get("api_key")

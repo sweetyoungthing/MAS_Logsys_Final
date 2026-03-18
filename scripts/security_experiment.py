@@ -1,10 +1,17 @@
 import json
 import os
 import re
+import sys
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Dict, List, Set
 
-from mas_security import (
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+BACKEND_DIR = PROJECT_ROOT / "backend"
+if str(BACKEND_DIR) not in sys.path:
+    sys.path.insert(0, str(BACKEND_DIR))
+
+from app.security.cata_log import (
     analyze_event_sequence_with_config,
     enrich_event_security,
     get_method_config,
@@ -13,7 +20,9 @@ from mas_security import (
 )
 
 
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+SCRIPT_DIR = str(Path(__file__).resolve().parent)
+OUTPUT_DIR = PROJECT_ROOT / "scripts" / "output"
+OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 OUTPUT_PREFIX = f"security_eval_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
 
 
@@ -618,8 +627,8 @@ def main() -> None:
         "ablations": ablations,
     }
 
-    out_json = os.path.join(SCRIPT_DIR, f"{OUTPUT_PREFIX}.json")
-    out_txt = os.path.join(SCRIPT_DIR, f"{OUTPUT_PREFIX}.txt")
+    out_json = os.path.join(str(OUTPUT_DIR), f"{OUTPUT_PREFIX}.json")
+    out_txt = os.path.join(str(OUTPUT_DIR), f"{OUTPUT_PREFIX}.txt")
 
     with open(out_json, "w", encoding="utf-8") as f:
         json.dump(report, f, ensure_ascii=False, indent=2)
