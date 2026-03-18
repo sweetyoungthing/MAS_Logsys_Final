@@ -10,6 +10,10 @@ export default defineConfig({
       '@': resolve(__dirname, 'src')
     }
   },
+  test: {
+    environment: 'node',
+    globals: true
+  },
   server: {
     port: 5173,
     proxy: {
@@ -20,4 +24,3 @@ export default defineConfig({
     }
   }
 })
-

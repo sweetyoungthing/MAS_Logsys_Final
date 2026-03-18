@@ -154,6 +154,7 @@ class TripPlanResponse(BaseModel):
     """旅行计划响应"""
     success: bool = Field(..., description="是否成功")
     message: str = Field(default="", description="消息")
+    plan_id: Optional[str] = Field(default=None, description="已持久化的计划ID")
     data: Optional[TripPlan] = Field(default=None, description="旅行计划数据")
 
 
@@ -203,4 +204,3 @@ class ErrorResponse(BaseModel):
     success: bool = Field(default=False, description="是否成功")
     message: str = Field(..., description="错误消息")
     error_code: Optional[str] = Field(default=None, description="错误代码")
-

@@ -49,6 +49,7 @@ frontend/dist/
 # Runtime logs and traces
 backend/logs/
 backend/memory/traces/
+backend/data/trip_plans/
 autogen_trace_*.jsonl
 test_trace.jsonl
 

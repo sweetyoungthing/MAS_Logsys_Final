@@ -1,12 +1,19 @@
 """FastAPI主应用"""
 
+import logging
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from ..config import get_settings, validate_config, print_config
 from .routes import trip, poi, map as map_routes, mas
+from ..security import SecurityExceptionMiddleware
 
 # 获取配置
 settings = get_settings()
+logging.basicConfig(
+    level=getattr(logging, settings.log_level.upper(), logging.INFO),
+    format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
+)
 
 # 创建FastAPI应用
 app = FastAPI(
@@ -25,6 +32,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.add_middleware(SecurityExceptionMiddleware)
 
 # 注册路由
 app.include_router(trip.router, prefix="/api")
@@ -97,4 +105,3 @@ if __name__ == "__main__":
         port=settings.port,
         reload=True
     )
-

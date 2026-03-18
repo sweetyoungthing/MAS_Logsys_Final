@@ -1,12 +1,15 @@
 """旅行规划API路由"""
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from ...models.schemas import (
     TripRequest,
+    TripPlan,
     TripPlanResponse,
     ErrorResponse
 )
 from ...agents.trip_planner_agent import get_trip_planner_agent
+from ...security import ensure_safe_response, security_guard
+from ...services.trip_plan_store import get_trip_plan_store
 
 router = APIRouter(prefix="/trip", tags=["旅行规划"])
 
@@ -15,7 +18,8 @@ router = APIRouter(prefix="/trip", tags=["旅行规划"])
     "/plan",
     response_model=TripPlanResponse,
     summary="生成旅行计划",
-    description="根据用户输入的旅行需求,生成详细的旅行计划"
+    description="根据用户输入的旅行需求,生成详细的旅行计划",
+    dependencies=[Depends(security_guard("trip-plan-request"))],
 )
 async def plan_trip(request: TripRequest):
     """
@@ -42,12 +46,17 @@ async def plan_trip(request: TripRequest):
         # 生成旅行计划
         print("🚀 开始生成旅行计划...")
         trip_plan = agent.plan_trip(request)
+        ensure_safe_response(trip_plan.model_dump(), source="/api/trip/plan", policy_name="trip-plan-response")
+
+        store = get_trip_plan_store()
+        plan_id = store.create(trip_plan)
 
         print("✅ 旅行计划生成成功,准备返回响应\n")
 
         return TripPlanResponse(
             success=True,
             message="旅行计划生成成功",
+            plan_id=plan_id,
             data=trip_plan
         )
 
@@ -59,6 +68,51 @@ async def plan_trip(request: TripRequest):
             status_code=500,
             detail=f"生成旅行计划失败: {str(e)}"
         )
+
+
+@router.get(
+    "/plans/{plan_id}",
+    response_model=TripPlanResponse,
+    summary="获取已保存的旅行计划",
+    description="根据计划ID获取已持久化的旅行计划"
+)
+async def get_trip_plan(plan_id: str):
+    """Load a stored trip plan by identifier."""
+    try:
+        trip_plan = get_trip_plan_store().get(plan_id)
+        return TripPlanResponse(
+            success=True,
+            message="获取旅行计划成功",
+            plan_id=plan_id,
+            data=trip_plan,
+        )
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="未找到对应的旅行计划")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"获取旅行计划失败: {str(e)}")
+
+
+@router.put(
+    "/plans/{plan_id}",
+    response_model=TripPlanResponse,
+    summary="更新已保存的旅行计划",
+    description="更新持久化存储中的旅行计划",
+    dependencies=[Depends(security_guard("trip-plan-update-request"))],
+)
+async def update_trip_plan(plan_id: str, request: TripPlan):
+    """Update a stored trip plan by identifier."""
+    try:
+        ensure_safe_response(request.model_dump(), source=f"/api/trip/plans/{plan_id}", policy_name="trip-plan-update-response")
+        store = get_trip_plan_store()
+        store.update(plan_id, request)
+        return TripPlanResponse(
+            success=True,
+            message="旅行计划更新成功",
+            plan_id=plan_id,
+            data=request,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"更新旅行计划失败: {str(e)}")
 
 
 @router.get(

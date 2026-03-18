@@ -15,7 +15,7 @@ const router = createRouter({
       component: Home
     },
     {
-      path: '/result',
+      path: '/result/:planId?',
       name: 'Result',
       component: Result
     }
@@ -28,4 +28,3 @@ app.use(router)
 app.use(Antd)
 
 app.mount('#app')
-

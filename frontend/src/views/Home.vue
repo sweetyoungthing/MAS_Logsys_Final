@@ -235,10 +235,12 @@ import { ref, reactive, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { message } from 'ant-design-vue'
 import { generateTripPlan, getLatestTrace } from '@/services/api'
+import { useTripPlanStore } from '@/stores/tripPlan'
 import type { TripFormData } from '@/types'
 import type { Dayjs } from 'dayjs'
 
 const router = useRouter()
+const tripPlanStore = useTripPlanStore()
 const loading = ref(false)
 const loadingProgress = ref(0)
 const loadingStatus = ref('')
@@ -325,14 +327,16 @@ const handleSubmit = async () => {
     loadingStatus.value = '✅ 完成!'
 
     if (response.success && response.data) {
-      // 保存到sessionStorage
-      sessionStorage.setItem('tripPlan', JSON.stringify(response.data))
+      tripPlanStore.setTripPlan(response.plan_id ?? null, response.data)
 
       message.success('旅行计划生成成功!')
 
       // 短暂延迟后跳转
       setTimeout(() => {
-        router.push('/result')
+        router.push({
+          name: 'Result',
+          params: response.plan_id ? { planId: response.plan_id } : {}
+        })
       }, 500)
     } else {
       message.error(response.message || '生成失败')

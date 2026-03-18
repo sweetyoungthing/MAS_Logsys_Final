@@ -339,17 +339,21 @@
 
 <script setup lang="ts">
 import { ref, onMounted, nextTick, onBeforeUnmount } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { message } from 'ant-design-vue'
 import { DownOutlined } from '@ant-design/icons-vue'
 import AMapLoader from '@amap/amap-jsapi-loader'
 import html2canvas from 'html2canvas'
 import jsPDF from 'jspdf'
 import type { TripPlan } from '@/types'
-import { getLatestTrace } from '@/services/api'
+import { fetchTripPlan, getAttractionPhoto, getLatestTrace, updateTripPlan } from '@/services/api'
+import { useTripPlanStore } from '@/stores/tripPlan'
 
+const route = useRoute()
 const router = useRouter()
+const tripPlanStore = useTripPlanStore()
 const tripPlan = ref<TripPlan | null>(null)
+const currentPlanId = ref<string | null>(null)
 const editMode = ref(false)
 const originalPlan = ref<TripPlan | null>(null)
 const attractionPhotos = ref<Record<string, string>>({})
@@ -363,15 +367,7 @@ const fallbackMapUrl = ref('')
 let map: any = null
 
 onMounted(async () => {
-  const data = sessionStorage.getItem('tripPlan')
-  if (data) {
-    tripPlan.value = JSON.parse(data)
-    // 加载景点图片
-    await loadAttractionPhotos()
-    // 等待DOM渲染完成后初始化地图
-    await nextTick()
-    initMap()
-  }
+  await initializeResultPage()
 })
 
 onBeforeUnmount(() => {
@@ -386,6 +382,51 @@ onBeforeUnmount(() => {
 
 const goBack = () => {
   router.push('/')
+}
+
+const setCurrentTripPlan = (planId: string | null, plan: TripPlan) => {
+  currentPlanId.value = planId
+  const normalizedPlan = JSON.parse(JSON.stringify(plan)) as TripPlan
+  tripPlan.value = normalizedPlan
+  tripPlanStore.setTripPlan(planId, normalizedPlan)
+}
+
+const initializeTripArtifacts = async () => {
+  if (!tripPlan.value) return
+  attractionPhotos.value = {}
+  await loadAttractionPhotos()
+  await nextTick()
+  initMap()
+}
+
+const initializeResultPage = async () => {
+  const routePlanId = typeof route.params.planId === 'string' ? route.params.planId : null
+  const cachedPlan = tripPlanStore.state.tripPlan
+  const cachedPlanId = tripPlanStore.state.planId
+
+  if (cachedPlan) {
+    setCurrentTripPlan(cachedPlanId, JSON.parse(JSON.stringify(cachedPlan)) as TripPlan)
+  }
+
+  const targetPlanId = routePlanId || cachedPlanId
+  if (!targetPlanId) {
+    return
+  }
+
+  try {
+    const response = await fetchTripPlan(targetPlanId)
+    if (response.success && response.data) {
+      setCurrentTripPlan(response.plan_id ?? targetPlanId, response.data)
+    }
+  } catch (error: any) {
+    if (!tripPlan.value) {
+      message.error(error.message || '获取旅行计划失败')
+      return
+    }
+    message.warning('已使用本地缓存的旅行计划，后端同步失败')
+  }
+
+  await initializeTripArtifacts()
 }
 
 // 滚动到指定区域
@@ -406,21 +447,34 @@ const toggleEditMode = () => {
 }
 
 // 保存修改
-const saveChanges = () => {
-  editMode.value = false
-  // 更新sessionStorage
-  if (tripPlan.value) {
-    sessionStorage.setItem('tripPlan', JSON.stringify(tripPlan.value))
-  }
-  message.success('修改已保存')
+const saveChanges = async () => {
+  if (!tripPlan.value) return
 
-  // 重新初始化地图以反映更改
-  if (map) {
-    map.destroy()
+  try {
+    editMode.value = false
+
+    if (currentPlanId.value) {
+      const response = await updateTripPlan(currentPlanId.value, tripPlan.value)
+      if (response.success && response.data) {
+        setCurrentTripPlan(response.plan_id ?? currentPlanId.value, response.data)
+      } else {
+        tripPlanStore.setTripPlan(currentPlanId.value, tripPlan.value)
+      }
+    } else {
+      tripPlanStore.setTripPlan(null, tripPlan.value)
+    }
+
+    message.success('修改已保存')
+
+    // 重新初始化地图以反映更改
+    if (map) {
+      map.destroy()
+    }
+    await initializeTripArtifacts()
+  } catch (error: any) {
+    editMode.value = true
+    message.error(error.message || '保存修改失败')
   }
-  nextTick(() => {
-    initMap()
-  })
 }
 
 // 取消编辑
@@ -495,11 +549,10 @@ const loadAttractionPhotos = async () => {
 
   tripPlan.value.days.forEach(day => {
     day.attractions.forEach(attraction => {
-      const promise = fetch(`http://localhost:8000/api/poi/photo?name=${encodeURIComponent(attraction.name)}`)
-        .then(res => res.json())
-        .then(data => {
-          if (data.success && data.data.photo_url) {
-            attractionPhotos.value[attraction.name] = data.data.photo_url
+      const promise = getAttractionPhoto(attraction.name)
+        .then(photoUrl => {
+          if (photoUrl) {
+            attractionPhotos.value[attraction.name] = photoUrl
           }
         })
         .catch(err => {

@@ -1,6 +1,6 @@
 """地图服务API路由"""
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from typing import Optional
 from ...models.schemas import (
     POISearchRequest,
@@ -9,7 +9,13 @@ from ...models.schemas import (
     RouteResponse,
     WeatherResponse
 )
-from ...services.amap_service import get_amap_service
+from ...security import ensure_safe_response, security_guard
+from ...services.amap_service import (
+    AmapRateLimitError,
+    AmapServiceError,
+    AmapValidationError,
+    get_amap_service,
+)
 
 router = APIRouter(prefix="/map", tags=["地图服务"])
 
@@ -18,7 +24,8 @@ router = APIRouter(prefix="/map", tags=["地图服务"])
     "/poi",
     response_model=POISearchResponse,
     summary="搜索POI",
-    description="根据关键词搜索POI(兴趣点)"
+    description="根据关键词搜索POI(兴趣点)",
+    dependencies=[Depends(security_guard("map-poi-request"))],
 )
 async def search_poi(
     keywords: str = Query(..., description="搜索关键词", example="故宫"),
@@ -42,6 +49,7 @@ async def search_poi(
         
         # 搜索POI
         pois = service.search_poi(keywords, city, citylimit)
+        ensure_safe_response([poi.model_dump() for poi in pois], source="/api/map/poi", policy_name="map-poi-response")
         
         return POISearchResponse(
             success=True,
@@ -49,6 +57,12 @@ async def search_poi(
             data=pois
         )
         
+    except AmapValidationError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except AmapRateLimitError as e:
+        raise HTTPException(status_code=429, detail=str(e))
+    except AmapServiceError as e:
+        raise HTTPException(status_code=502, detail=str(e))
     except Exception as e:
         print(f"❌ POI搜索失败: {str(e)}")
         raise HTTPException(
@@ -61,7 +75,8 @@ async def search_poi(
     "/weather",
     response_model=WeatherResponse,
     summary="查询天气",
-    description="查询指定城市的天气信息"
+    description="查询指定城市的天气信息",
+    dependencies=[Depends(security_guard("map-weather-request"))],
 )
 async def get_weather(
     city: str = Query(..., description="城市名称", example="北京")
@@ -81,6 +96,7 @@ async def get_weather(
         
         # 查询天气
         weather_info = service.get_weather(city)
+        ensure_safe_response([item.model_dump() for item in weather_info], source="/api/map/weather", policy_name="map-weather-response")
         
         return WeatherResponse(
             success=True,
@@ -88,6 +104,12 @@ async def get_weather(
             data=weather_info
         )
         
+    except AmapValidationError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except AmapRateLimitError as e:
+        raise HTTPException(status_code=429, detail=str(e))
+    except AmapServiceError as e:
+        raise HTTPException(status_code=502, detail=str(e))
     except Exception as e:
         print(f"❌ 天气查询失败: {str(e)}")
         raise HTTPException(
@@ -100,7 +122,8 @@ async def get_weather(
     "/route",
     response_model=RouteResponse,
     summary="规划路线",
-    description="规划两点之间的路线"
+    description="规划两点之间的路线",
+    dependencies=[Depends(security_guard("map-route-request"))],
 )
 async def plan_route(request: RouteRequest):
     """
@@ -124,6 +147,7 @@ async def plan_route(request: RouteRequest):
             destination_city=request.destination_city,
             route_type=request.route_type
         )
+        ensure_safe_response(route_info.model_dump(), source="/api/map/route", policy_name="map-route-response")
         
         return RouteResponse(
             success=True,
@@ -131,6 +155,12 @@ async def plan_route(request: RouteRequest):
             data=route_info
         )
         
+    except AmapValidationError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except AmapRateLimitError as e:
+        raise HTTPException(status_code=429, detail=str(e))
+    except AmapServiceError as e:
+        raise HTTPException(status_code=502, detail=str(e))
     except Exception as e:
         print(f"❌ 路线规划失败: {str(e)}")
         raise HTTPException(
@@ -148,16 +178,15 @@ async def health_check():
     """健康检查"""
     try:
         # 检查服务是否可用
-        service = get_amap_service()
+        get_amap_service()
         
         return {
             "status": "healthy",
             "service": "map-service",
-            "mcp_tools_count": len(service.mcp_tool._available_tools)
+            "provider": "amap-rest-api"
         }
     except Exception as e:
         raise HTTPException(
             status_code=503,
             detail=f"服务不可用: {str(e)}"
         )
-

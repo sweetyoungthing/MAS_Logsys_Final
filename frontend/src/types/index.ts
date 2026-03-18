@@ -90,6 +90,6 @@ export interface TripFormData {
 export interface TripPlanResponse {
   success: boolean
   message: string
+  plan_id?: string
   data?: TripPlan
 }
-
