@@ -1,0 +1,65 @@
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Environment files
+.env
+.env.local
+backend/.env
+frontend/.env
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual environments
+venv/
+env/
+ENV/
+.venv/
+backend/.venv/
+frontend/.venv/
+
+# Build / packaging
+build/
+dist/
+site/
+.eggs/
+*.egg
+*.egg-info/
+pip-wheel-metadata/
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+
+# Runtime logs and traces
+backend/logs/
+backend/memory/traces/
+autogen_trace_*.jsonl
+test_trace.jsonl
+
+# Generated analysis artifacts
+security_eval_*.json
+security_eval_*.txt
+autogen_trace_*_graph.png
+autogen_trace_*_details.txt
+autogen_trace_*_security_summary.txt
+autogen_trace_*_attack_chains.txt
+
+# Local temp / caches
+tmp/
+temp/
