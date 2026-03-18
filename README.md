@@ -446,15 +446,6 @@ npm run build
 - 已执行过一次旅行规划或相关脚本
 - `backend/logs/` 下存在 `autogen_trace_*.jsonl`
 
-## 后续建议
-
-如果准备继续完善这个毕业设计系统，优先级较高的方向包括：
-
-- 继续拆分 `frontend/src/views/Result.vue`，降低页面复杂度
-- 为 `amap_service.py` 补更多异常分支测试
-- 给旅行计划持久化与编辑流程补前后端联调测试
-- 为脚本补统一 CLI 入口和参数说明
-
 ## License
 
 当前仓库未声明开源许可证。如需公开发布，建议补充明确的 License 文件。
