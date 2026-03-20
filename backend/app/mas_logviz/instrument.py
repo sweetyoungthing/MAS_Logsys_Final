@@ -15,24 +15,26 @@ def instrument_agent(agent: Any, agent_name: str = None):
 
     @functools.wraps(original_run)
     def wrapped_run(query: Any, *args, **kwargs):
-        # Log the user query (input to agent)
-        # We assume the caller is "User" or the system. 
-        # In a chain, it might be ambiguous, but for now we log it as "User" -> Agent interaction.
-        # But wait, if we log "User", we might duplicate if the caller already logged it.
-        # In trip_planner_agent.py, the planner prints steps.
-        # We'll rely on the instrumented run to log the INPUT as a message from "User" (or context)
-        # and OUTPUT as a message from Agent.
-        
-        # Check if we should log the input.
-        # If the input is a string, log it.
         if isinstance(query, str):
-             log_message("User", query, role="user")
+            log_message(
+                "Orchestrator",
+                query,
+                role="system",
+                receiver=name,
+                channel="agent_message",
+                trust_level="internal_system",
+            )
         
         result = original_run(query, *args, **kwargs)
         
-        # Log the result
         if result:
-            log_message(name, result, role="assistant")
+            log_message(
+                name,
+                result,
+                role="assistant",
+                channel="agent_message",
+                trust_level="internal_agent_output",
+            )
             
         return result
 

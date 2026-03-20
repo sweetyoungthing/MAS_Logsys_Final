@@ -359,6 +359,7 @@ def with_ablation(config: Optional[Dict[str, Any]], mode: str) -> Dict[str, Any]
     w = cfg["fusion_weights"]
     if mode == "no_semantic":
         w["semantic"] = 0.0
+        cfg.setdefault("semantic_encoder", {})["name"] = "disabled"
     elif mode == "no_protocol":
         w["protocol"] = 0.0
     elif mode == "no_temporal":
@@ -473,6 +474,13 @@ def _get_sbert_runtime(config: Dict[str, Any], state: Dict[str, Any]) -> Dict[st
 def _semantic_intent_scores(text: str, config: Dict[str, Any], state: Dict[str, Any]) -> Dict[str, float]:
     norm = _normalize_text(text)
     if not norm:
+        return {k: 0.0 for k in ATTACK_TYPES}
+
+    sem_cfg = dict((config or {}).get("semantic_encoder") or {})
+    sem_name = str(sem_cfg.get("name") or "sbert").strip().lower()
+    sem_weight = _safe_float(((config or {}).get("fusion_weights") or {}).get("semantic"), 0.0)
+    ablation = str((config or {}).get("ablation") or "").strip().lower()
+    if sem_name in ("disabled", "none", "off") or sem_weight <= 0.0 or ablation == "no_semantic":
         return {k: 0.0 for k in ATTACK_TYPES}
 
     rt = _get_sbert_runtime(config=config, state=state)

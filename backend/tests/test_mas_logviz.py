@@ -14,7 +14,7 @@ matplotlib.use('Agg')
 import sys
 sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
 
-from app.mas_logviz.logger import init_context, log_message, log_tool_start, log_tool_end, RunContext
+from app.mas_logviz.logger import finalize_execution, init_context, log_message, log_tool_start, log_tool_end
 from app.mas_logviz.visualizer import parse_log_to_graph, draw_graph
 from app.mas_logviz.instrument import instrument_agent
 
@@ -27,8 +27,7 @@ class TestMASLogViz(unittest.TestCase):
         # Mock RunContext to point to temp file
         # We need to access the global _CTX in logger
         import app.mas_logviz.logger as logger
-        logger._CTX = RunContext()
-        logger._CTX.enabled = True
+        init_context(True, persist_logs=True, security_enabled=True)
         logger._CTX.log_path = self.log_path
 
     def tearDown(self):
@@ -90,17 +89,26 @@ class TestMASLogViz(unittest.TestCase):
         # Check logs
         with open(self.log_path, 'r') as f:
             lines = f.readlines()
-            # Expect: User msg (input), Agent msg (output)
-            # instrument_agent logs input as User msg
-            # instrument_agent logs output as Agent msg
             self.assertEqual(len(lines), 2)
             e1 = json.loads(lines[0])
-            self.assertEqual(e1['agent'], 'User')
+            self.assertEqual(e1['agent'], 'Orchestrator')
             self.assertEqual(e1['content'], 'Hi')
             
             e2 = json.loads(lines[1])
             self.assertEqual(e2['agent'], 'TestAgent')
             self.assertEqual(e2['content'], 'Response to Hi')
+
+    def test_finalize_execution_writes_final_and_summary(self):
+        log_message("User", "请规划北京两日游", role="user", channel="user_instruction", trust_level="trusted_user_input")
+        annotated, summary = finalize_execution('{"city":"北京","days":[]}', agent="PlannerAgent")
+
+        self.assertGreaterEqual(len(annotated), 2)
+        self.assertIn("max_risk_score", summary)
+
+        with open(self.log_path, 'r') as f:
+            lines = [json.loads(line) for line in f if line.strip()]
+        self.assertEqual(lines[-2]["type"], "final")
+        self.assertEqual(lines[-1]["type"], "security_summary")
 
 if __name__ == '__main__':
     unittest.main()

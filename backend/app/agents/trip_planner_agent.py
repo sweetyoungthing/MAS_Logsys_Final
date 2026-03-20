@@ -13,7 +13,8 @@ except Exception:
 from ..services.llm_service import get_llm
 from ..models.schemas import TripRequest, TripPlan
 from ..config import get_settings
-from ..mas_logviz.logger import init_context, log_message, set_current_step
+from ..mas_logviz.logger import finalize_execution, init_context, log_message, set_current_step
+from ..security import ensure_safe_mas_execution
 from ..mas_logviz.instrument import instrument_agent, instrument_mcp_tool
 
 # ============ Agent提示词 ============
@@ -284,9 +285,26 @@ class MultiAgentTripPlanner:
             settings = get_settings()
             
             # Initialize MAS Logging Context
-            init_context(settings.enable_mas_logviz)
-            if settings.enable_mas_logviz:
-                log_message("System", f"Starting trip planning for {request.city}", role="system")
+            init_context(
+                settings.enable_mas_logviz or settings.enable_mas_security,
+                persist_logs=settings.enable_mas_logviz,
+                security_enabled=settings.enable_mas_security,
+            )
+            if settings.enable_mas_security:
+                log_message(
+                    "User",
+                    json.dumps(request.model_dump(), ensure_ascii=False),
+                    role="user",
+                    channel="user_instruction",
+                    trust_level="trusted_user_input",
+                )
+                log_message(
+                    "System",
+                    f"Starting trip planning for {request.city}",
+                    role="system",
+                    channel="agent_message",
+                    trust_level="internal_system",
+                )
 
             print(f"\n{'='*60}")
             print(f"🚀 开始多智能体协作规划旅行...")
@@ -335,6 +353,15 @@ class MultiAgentTripPlanner:
                 "步骤4-行程生成"
             )
             print(f"行程规划结果: {planner_response[:300]}...\n")
+
+            if settings.enable_mas_security:
+                annotated_events, security_summary = finalize_execution(planner_response, agent="PlannerAgent")
+                ensure_safe_mas_execution(
+                    security_summary,
+                    source="/api/trip/plan",
+                    policy_name="trip-plan-mas-runtime",
+                    events=annotated_events,
+                )
 
             # 解析最终计划
             trip_plan = self._parse_response(planner_response, request)

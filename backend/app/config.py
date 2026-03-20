@@ -51,6 +51,7 @@ class Settings(BaseSettings):
 
     # MAS日志可视化配置
     enable_mas_logviz: bool = True
+    enable_mas_security: bool = True
 
     class Config:
         env_file = ".env"
@@ -130,3 +131,5 @@ def print_config():
     print(f"LLM Timeout: {settings.llm_timeout}s")
     print(f"LLM Retry Attempts: {settings.llm_retry_attempts}")
     print(f"日志级别: {settings.log_level}")
+    print(f"MAS日志可视化: {'开启' if settings.enable_mas_logviz else '关闭'}")
+    print(f"MAS运行安全分析: {'开启' if settings.enable_mas_security else '关闭'}")

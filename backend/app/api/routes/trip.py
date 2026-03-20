@@ -9,6 +9,7 @@ from ...models.schemas import (
 )
 from ...agents.trip_planner_agent import get_trip_planner_agent
 from ...security import ensure_safe_response, security_guard
+from ...security.exceptions import SecurityInterceptionError
 from ...services.trip_plan_store import get_trip_plan_store
 
 router = APIRouter(prefix="/trip", tags=["旅行规划"])
@@ -60,6 +61,8 @@ async def plan_trip(request: TripRequest):
             data=trip_plan
         )
 
+    except SecurityInterceptionError:
+        raise
     except Exception as e:
         print(f"❌ 生成旅行计划失败: {str(e)}")
         import traceback
@@ -111,6 +114,8 @@ async def update_trip_plan(plan_id: str, request: TripPlan):
             plan_id=plan_id,
             data=request,
         )
+    except SecurityInterceptionError:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"更新旅行计划失败: {str(e)}")
 

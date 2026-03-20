@@ -12,6 +12,8 @@ sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
 
 from app.security import SecurityExceptionMiddleware, ensure_safe_response, security_guard
 from app.security.analyzer import get_security_analyzer
+from app.security.exceptions import SecurityInterceptionError
+from app.security.service import ensure_safe_mas_execution
 
 
 class EchoRequest(BaseModel):
@@ -83,6 +85,56 @@ class SecurityIntegrationTest(unittest.TestCase):
         self.assertEqual(response.status_code, 403)
         self.assertEqual(body["error_code"], "SECURITY_RISK_BLOCKED")
         self.assertGreaterEqual(body["risk_score"], 65)
+
+    def test_cata_log_summary_blocks_successful_attack_chain(self) -> None:
+        """A successful MAS attack chain should be converted into a security interception."""
+        summary = {
+            "max_risk_score": 91,
+            "successful_attack_chain_count": 1,
+            "attempted_attack_chain_count": 0,
+            "findings_by_category": {"CompromisedDecision": 1},
+            "attack_chains": [{"attack_type": "prompt_injection", "status": "successful"}],
+        }
+        events = [
+            {
+                "security": {
+                    "risk_score": 91,
+                    "findings": [
+                        {
+                            "category": "CompromisedDecision",
+                            "severity": 5,
+                            "confidence": 0.93,
+                            "evidence": "compromised final decision",
+                        }
+                    ],
+                }
+            }
+        ]
+
+        with self.assertRaises(SecurityInterceptionError):
+            ensure_safe_mas_execution(
+                summary,
+                source="/api/trip/plan",
+                policy_name="trip-plan-mas-runtime",
+                events=events,
+            )
+
+    def test_cata_log_summary_allows_attempted_but_unsuccessful_attack(self) -> None:
+        """Attempted attacks without compromised decisions should not be auto-blocked."""
+        summary = {
+            "max_risk_score": 74,
+            "successful_attack_chain_count": 0,
+            "attempted_attack_chain_count": 1,
+            "findings_by_category": {"PromptInjection": 1},
+            "attack_chains": [{"attack_type": "prompt_injection", "status": "attempted"}],
+        }
+
+        ensure_safe_mas_execution(
+            summary,
+            source="/api/trip/plan",
+            policy_name="trip-plan-mas-runtime",
+            events=[],
+        )
 
 
 if __name__ == "__main__":

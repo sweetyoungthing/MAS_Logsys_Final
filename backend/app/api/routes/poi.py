@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from typing import List, Optional
 from ...security import ensure_safe_response, security_guard
+from ...security.exceptions import SecurityInterceptionError
 from ...services.amap_service import (
     AmapRateLimitError,
     AmapServiceError,
@@ -58,6 +59,8 @@ async def get_poi_detail(poi_id: str):
         raise HTTPException(status_code=429, detail=str(e))
     except AmapServiceError as e:
         raise HTTPException(status_code=502, detail=str(e))
+    except SecurityInterceptionError:
+        raise
     except Exception as e:
         print(f"❌ 获取POI详情失败: {str(e)}")
         raise HTTPException(
@@ -100,6 +103,8 @@ async def search_poi(keywords: str, city: str = "北京"):
         raise HTTPException(status_code=429, detail=str(e))
     except AmapServiceError as e:
         raise HTTPException(status_code=502, detail=str(e))
+    except SecurityInterceptionError:
+        raise
     except Exception as e:
         print(f"❌ 搜索POI失败: {str(e)}")
         raise HTTPException(

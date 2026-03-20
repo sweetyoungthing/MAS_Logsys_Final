@@ -10,6 +10,7 @@ from ...models.schemas import (
     WeatherResponse
 )
 from ...security import ensure_safe_response, security_guard
+from ...security.exceptions import SecurityInterceptionError
 from ...services.amap_service import (
     AmapRateLimitError,
     AmapServiceError,
@@ -63,6 +64,8 @@ async def search_poi(
         raise HTTPException(status_code=429, detail=str(e))
     except AmapServiceError as e:
         raise HTTPException(status_code=502, detail=str(e))
+    except SecurityInterceptionError:
+        raise
     except Exception as e:
         print(f"❌ POI搜索失败: {str(e)}")
         raise HTTPException(
@@ -110,6 +113,8 @@ async def get_weather(
         raise HTTPException(status_code=429, detail=str(e))
     except AmapServiceError as e:
         raise HTTPException(status_code=502, detail=str(e))
+    except SecurityInterceptionError:
+        raise
     except Exception as e:
         print(f"❌ 天气查询失败: {str(e)}")
         raise HTTPException(
@@ -161,6 +166,8 @@ async def plan_route(request: RouteRequest):
         raise HTTPException(status_code=429, detail=str(e))
     except AmapServiceError as e:
         raise HTTPException(status_code=502, detail=str(e))
+    except SecurityInterceptionError:
+        raise
     except Exception as e:
         print(f"❌ 路线规划失败: {str(e)}")
         raise HTTPException(
