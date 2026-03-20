@@ -1,6 +1,7 @@
 """多智能体旅行规划系统"""
 
 import json
+import re
 import time
 from typing import Any
 from hello_agents import SimpleAgent
@@ -149,15 +150,17 @@ PLANNER_AGENT_PROMPT = """你是行程规划专家。你的任务是根据景点
 **重要提示:**
 1. weather_info数组必须包含每一天的天气信息
 2. 温度必须是纯数字(不要带°C等单位)
-3. 每天安排2-3个景点
+3. 每天最多安排2个景点
 4. 考虑景点之间的距离和游览时间
 5. 每天必须包含早中晚三餐
-6. 提供实用的旅行建议
+6. 提供简短实用的旅行建议
 7. **必须包含预算信息**:
    - 景点门票价格(ticket_price)
    - 餐饮预估费用(estimated_cost)
    - 酒店预估费用(estimated_cost)
    - 预算汇总(budget)包含各项总费用
+8. 只输出一个合法JSON对象,不要输出Markdown、解释或代码块
+9. description、overall_suggestions、meals.description 必须简短,控制在单句内
 """
 
 
@@ -270,6 +273,17 @@ class MultiAgentTripPlanner:
             import traceback
             traceback.print_exc()
             raise
+
+    def _reset_agent_histories(self) -> None:
+        """Clear chat history so each trip request starts with a clean context."""
+        for agent in (
+            getattr(self, "attraction_agent", None),
+            getattr(self, "weather_agent", None),
+            getattr(self, "hotel_agent", None),
+            getattr(self, "planner_agent", None),
+        ):
+            if agent is not None and hasattr(agent, "clear_history"):
+                agent.clear_history()
     
     def plan_trip(self, request: TripRequest) -> TripPlan:
         """
@@ -283,6 +297,7 @@ class MultiAgentTripPlanner:
         """
         try:
             settings = get_settings()
+            self._reset_agent_histories()
             
             # Initialize MAS Logging Context
             init_context(
@@ -346,12 +361,22 @@ class MultiAgentTripPlanner:
 
             # 步骤4: 行程规划Agent整合信息生成计划
             print("📋 步骤4: 生成行程计划...")
-            planner_query = self._build_planner_query(request, attraction_response, weather_response, hotel_response)
-            planner_response = self._run_agent_with_retry(
-                self.planner_agent,
+            planner_attractions, attraction_count = self._compress_attractions_for_planner(attraction_response)
+            planner_weather, weather_count = self._compress_weather_for_planner(
+                weather_response,
+                max_days=request.travel_days,
+            )
+            planner_hotels, hotel_count = self._compress_hotels_for_planner(hotel_response)
+            planner_query = self._build_planner_query(request, planner_attractions, planner_weather, planner_hotels)
+            print(
+                f"📦 Planner输入压缩: attractions={attraction_count}, "
+                f"weather={weather_count}, hotels={hotel_count}, query_len={len(planner_query)}"
+            )
+            planner_response = self._run_planner_with_retry(
                 planner_query,
                 "步骤4-行程生成"
             )
+            print(f"🧾 Planner输出长度: {len(planner_response)}")
             print(f"行程规划结果: {planner_response[:300]}...\n")
 
             if settings.enable_mas_security:
@@ -391,6 +416,9 @@ class MultiAgentTripPlanner:
             "502",
             "503",
             "504",
+            "remoteprotocolerror",
+            "incomplete chunked read",
+            "peer closed connection",
         ]
         return any(signal in msg for signal in retry_signals)
 
@@ -401,6 +429,34 @@ class MultiAgentTripPlanner:
         for attempt in range(1, total_attempts + 1):
             try:
                 return agent.run(query)
+            except Exception as e:
+                last_error = e
+                should_retry = self._is_retryable_error(e) and attempt < total_attempts
+                if not should_retry:
+                    raise
+
+                wait_seconds = self.retry_backoff_seconds * attempt
+                print(
+                    f"⚠️ {step_name} 第{attempt}次调用失败: {e}. "
+                    f"{wait_seconds}s后重试({attempt + 1}/{total_attempts})..."
+                )
+                time.sleep(wait_seconds)
+
+        raise RuntimeError(f"{step_name} 调用失败: {last_error}")
+
+    def _run_planner_with_retry(self, query: str, step_name: str) -> str:
+        """Run the planner in strict JSON mode to reduce malformed output."""
+        last_error = None
+        total_attempts = max(1, self.retry_attempts + 1)
+
+        for attempt in range(1, total_attempts + 1):
+            try:
+                return self.planner_agent.run(
+                    query,
+                    response_format={"type": "json_object"},
+                    temperature=0.0,
+                    max_tokens=5000,
+                )
             except Exception as e:
                 last_error = e
                 should_retry = self._is_retryable_error(e) and attempt < total_attempts
@@ -429,6 +485,161 @@ class MultiAgentTripPlanner:
         query = f"请使用amap_maps_text_search工具搜索{request.city}的{keywords}相关景点。\n[TOOL_CALL:amap_maps_text_search:keywords={keywords},city={request.city}]"
         return query
 
+    @staticmethod
+    def _normalize_line(line: str) -> str:
+        text = str(line or "")
+        text = text.replace("**", "").replace("`", "").replace("#", "")
+        text = text.replace("•", "-").replace("—", "-")
+        return re.sub(r"\s+", " ", text).strip()
+
+    @classmethod
+    def _truncate_text(cls, text: str, max_len: int) -> str:
+        plain = cls._normalize_line(text)
+        if len(plain) <= max_len:
+            return plain
+        return plain[: max_len - 1].rstrip() + "…"
+
+    @classmethod
+    def _split_ranked_blocks(cls, text: str) -> list[str]:
+        cleaned = str(text or "").replace("**", "")
+        blocks = [
+            m.group(0).strip()
+            for m in re.finditer(r"(?ms)^\s*\d+\.\s+.+?(?=^\s*\d+\.\s+|\Z)", cleaned)
+        ]
+        return blocks
+
+    @classmethod
+    def _extract_address(cls, text: str) -> str:
+        patterns = [
+            r"地址[:：]\s*([^，。；;\n]+)",
+            r"位于([^，。；;\n]+)",
+        ]
+        for pattern in patterns:
+            match = re.search(pattern, text)
+            if match:
+                return cls._truncate_text(match.group(1), 32)
+        return ""
+
+    @classmethod
+    def _extract_type(cls, text: str) -> str:
+        match = re.search(r"类型[:：]\s*([^\n]+)", text)
+        if match:
+            return cls._truncate_text(match.group(1), 24)
+        return ""
+
+    @classmethod
+    def _extract_reason(cls, text: str) -> str:
+        plain = cls._normalize_line(text)
+        plain = re.sub(r"^\d+\.\s*", "", plain)
+        plain = re.sub(r"(地址|位于)[:：]?\s*[^。；;]+", "", plain)
+        plain = re.sub(r"类型[:：]?\s*[^。；;]+", "", plain)
+        plain = plain.replace("温馨提示：", "").replace("温馨提示:", "")
+        plain = plain.strip(" -;，。")
+        if not plain:
+            return ""
+        sentence = re.split(r"[。；;]", plain)[0]
+        return cls._truncate_text(sentence, 36)
+
+    @classmethod
+    def _extract_name(cls, text: str) -> str:
+        plain = cls._normalize_line(text)
+        plain = re.sub(r"^\d+\.\s*", "", plain)
+        for sep in (" - ", "：", ":"):
+            if sep in plain:
+                candidate = plain.split(sep, 1)[0].strip()
+                if candidate:
+                    return cls._truncate_text(candidate, 36)
+        return cls._truncate_text(plain, 36)
+
+    @classmethod
+    def _compress_attractions_for_planner(cls, text: str, limit: int = 6) -> tuple[str, int]:
+        items: list[str] = []
+        for block in cls._split_ranked_blocks(text):
+            name = cls._extract_name(block)
+            address = cls._extract_address(block)
+            reason = cls._extract_reason(block)
+            if not name:
+                continue
+            parts = [f"名称: {name}"]
+            if address:
+                parts.append(f"地址: {address}")
+            if reason:
+                parts.append(f"理由: {reason}")
+            items.append(" | ".join(parts))
+            if len(items) >= limit:
+                break
+        if not items:
+            fallback = cls._truncate_text(cls._normalize_line(text), 360)
+            return fallback, 0 if not fallback else 1
+        return "\n".join(f"- {item}" for item in items), len(items)
+
+    @classmethod
+    def _compress_hotels_for_planner(cls, text: str, limit: int = 4) -> tuple[str, int]:
+        items: list[str] = []
+        for block in cls._split_ranked_blocks(text):
+            name = cls._extract_name(block)
+            address = cls._extract_address(block)
+            hotel_type = cls._extract_type(block)
+            if not name:
+                continue
+            parts = [f"名称: {name}"]
+            if address:
+                parts.append(f"地址: {address}")
+            if hotel_type:
+                parts.append(f"类型: {hotel_type}")
+            items.append(" | ".join(parts))
+            if len(items) >= limit:
+                break
+        if not items:
+            fallback = cls._truncate_text(cls._normalize_line(text), 280)
+            return fallback, 0 if not fallback else 1
+        return "\n".join(f"- {item}" for item in items), len(items)
+
+    @classmethod
+    def _compress_weather_for_planner(cls, text: str, max_days: int) -> tuple[str, int]:
+        lines = [cls._normalize_line(line) for line in str(text or "").splitlines()]
+        lines = [line for line in lines if line]
+        blocks: list[dict[str, str]] = []
+        current: dict[str, str] | None = None
+
+        for line in lines:
+            if "温馨提示" in line or "根据查询结果" in line:
+                continue
+            if re.search(r"(今日|明日|后天|\d{1,2}月\d{1,2}日|\d{4}-\d{2}-\d{2})", line):
+                if current:
+                    blocks.append(current)
+                current = {"label": line.rstrip("：:")}
+                continue
+            if current is None:
+                continue
+            candidate = line.lstrip("- ").strip()
+            if "温馨提示" in candidate:
+                continue
+            if "天气" in candidate:
+                current["weather"] = candidate.split("：", 1)[-1].split(":", 1)[-1].strip()
+            elif "温度" in candidate:
+                current["temp"] = candidate.split("：", 1)[-1].split(":", 1)[-1].strip()
+            elif "风向风力" in candidate or candidate.startswith("风力") or candidate.startswith("风向"):
+                current["wind"] = candidate.split("：", 1)[-1].split(":", 1)[-1].strip()
+        if current:
+            blocks.append(current)
+
+        trimmed = blocks[:max(1, max_days)]
+        items = []
+        for block in trimmed:
+            parts = [block.get("label", "天气")]
+            if block.get("weather"):
+                parts.append(f"天气: {block['weather']}")
+            if block.get("temp"):
+                parts.append(f"温度: {block['temp']}")
+            if block.get("wind"):
+                parts.append(f"风力: {block['wind']}")
+            items.append("- " + " | ".join(parts))
+        if not items:
+            fallback = cls._truncate_text(cls._normalize_line(text), 240)
+            return fallback, 0 if not fallback else 1
+        return "\n".join(items), len(items)
+
     def _build_planner_query(self, request: TripRequest, attractions: str, weather: str, hotels: str = "") -> str:
         """构建行程规划查询"""
         query = f"""请根据以下信息生成{request.city}的{request.travel_days}天旅行计划:
@@ -451,18 +662,98 @@ class MultiAgentTripPlanner:
 {hotels}
 
 **要求:**
-1. 每天安排2-3个景点
+1. 每天最多安排2个景点
 2. 每天必须包含早中晚三餐
-3. 每天推荐一个具体的酒店(从酒店信息中选择)
-3. 考虑景点之间的距离和交通方式
-4. 返回完整的JSON格式数据
-5. 景点的经纬度坐标要真实准确
+3. 每天推荐一个具体的酒店，且必须只从上方酒店候选中选择
+4. 考虑景点之间的距离和交通方式
+5. 返回完整的JSON格式数据
+6. 景点的经纬度坐标要真实准确
+7. 只输出一个合法JSON对象，不要输出Markdown代码块，不要输出任何解释文字
+8. 每天 description 保持单句且简短
+9. overall_suggestions 控制在3句以内
+10. meals.description 使用简短短语，不要写长段落
 """
         if request.free_text_input:
             query += f"\n**额外要求:** {request.free_text_input}"
 
         return query
-    
+
+    @staticmethod
+    def _extract_json_candidate(response: str) -> str:
+        """Extract the most likely JSON object from an LLM response."""
+        text = str(response or "").strip()
+        if not text:
+            raise ValueError("响应为空")
+
+        if "```json" in text:
+            json_start = text.find("```json") + 7
+            json_end = text.find("```", json_start)
+            return text[json_start:json_end].strip() if json_end != -1 else text[json_start:].strip()
+
+        if "```" in text:
+            json_start = text.find("```") + 3
+            json_end = text.find("```", json_start)
+            snippet = text[json_start:json_end].strip() if json_end != -1 else text[json_start:].strip()
+            if snippet.startswith("{") or snippet.startswith("["):
+                return snippet
+
+        if "{" in text and "}" in text:
+            json_start = text.find("{")
+            json_end = text.rfind("}") + 1
+            return text[json_start:json_end].strip()
+
+        raise ValueError("响应中未找到JSON数据")
+
+    @staticmethod
+    def _normalize_json_candidate(json_str: str) -> str:
+        """Apply low-risk cleanup before JSON parsing."""
+        cleaned = str(json_str or "").strip()
+        cleaned = cleaned.replace("\u201c", '"').replace("\u201d", '"')
+        cleaned = cleaned.replace("\u2018", "'").replace("\u2019", "'")
+        cleaned = re.sub(r",(\s*[}\]])", r"\1", cleaned)
+        return cleaned
+
+    def _repair_trip_plan_json(self, draft: str, request: TripRequest) -> str:
+        """Regenerate a strict JSON trip plan when the draft is invalid."""
+        request_payload = json.dumps(request.model_dump(), ensure_ascii=False)
+        draft_text = str(draft or "")
+        if len(draft_text) > 6000:
+            draft_text = draft_text[:6000]
+
+        messages = [
+            {
+                "role": "system",
+                "content": (
+                    "你是旅行计划JSON修复器。"
+                    "你的唯一任务是输出严格合法的 JSON。"
+                    "不要输出 markdown，不要输出解释，不要输出代码块。"
+                    "输出必须能被 json.loads 直接解析。"
+                    "如果原草稿有语法错误，请基于原始请求重新生成完整且合法的JSON。"
+                ),
+            },
+            {
+                "role": "user",
+                "content": (
+                    f"请把下面的旅行计划草稿修复为严格 JSON。\n\n"
+                    f"原始请求：\n{request_payload}\n\n"
+                    f"待修复草稿：\n{draft_text}"
+                ),
+            },
+        ]
+        repaired = self.llm.invoke(
+            messages,
+            temperature=0.0,
+            max_tokens=3000,
+            response_format={"type": "json_object"},
+        )
+        return self._extract_json_candidate(repaired)
+
+    def _parse_trip_plan_json(self, json_str: str) -> TripPlan:
+        """Parse a JSON string into the TripPlan model."""
+        normalized = self._normalize_json_candidate(json_str)
+        data = json.loads(normalized)
+        return TripPlan(**data)
+
     def _parse_response(self, response: str, request: TripRequest) -> TripPlan:
         """
         解析Agent响应
@@ -475,34 +766,18 @@ class MultiAgentTripPlanner:
             旅行计划
         """
         try:
-            # 尝试从响应中提取JSON
-            # 查找JSON代码块
-            if "```json" in response:
-                json_start = response.find("```json") + 7
-                json_end = response.find("```", json_start)
-                json_str = response[json_start:json_end].strip()
-            elif "```" in response:
-                json_start = response.find("```") + 3
-                json_end = response.find("```", json_start)
-                json_str = response[json_start:json_end].strip()
-            elif "{" in response and "}" in response:
-                # 直接查找JSON对象
-                json_start = response.find("{")
-                json_end = response.rfind("}") + 1
-                json_str = response[json_start:json_end]
-            else:
-                raise ValueError("响应中未找到JSON数据")
-            
-            # 解析JSON
-            data = json.loads(json_str)
-            
-            # 转换为TripPlan对象
-            trip_plan = TripPlan(**data)
-            
-            return trip_plan
-            
+            json_str = self._extract_json_candidate(response)
+            return self._parse_trip_plan_json(json_str)
         except Exception as e:
-            raise ValueError(f"解析行程JSON失败: {str(e)}")
+            print(f"⚠️ 首次解析行程JSON失败，尝试自动修复: {e}")
+            try:
+                repaired_json = self._repair_trip_plan_json(response, request)
+                trip_plan = self._parse_trip_plan_json(repaired_json)
+                print("✅ 行程JSON自动修复成功")
+                return trip_plan
+            except Exception as repair_error:
+                print(f"⚠️ 修复后解析仍失败: {repair_error}")
+                raise ValueError(f"解析行程JSON失败: {str(repair_error)}") from repair_error
     
 # 全局多智能体系统实例
 _multi_agent_planner = None
