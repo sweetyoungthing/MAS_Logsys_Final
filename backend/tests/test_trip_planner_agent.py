@@ -11,11 +11,22 @@ from app.models.schemas import TripRequest
 
 
 class _FakeLLM:
-    def __init__(self, response: str):
+    def __init__(self, response: str, provider: str = "openai", model: str = "gpt-4o-mini"):
         self.response = response
+        self.provider = provider
+        self.model = model
 
     def invoke(self, messages, **kwargs) -> str:
         return self.response
+
+
+class _AlwaysFailPlannerAgent:
+    def __init__(self):
+        self.calls = 0
+
+    def run(self, query, **kwargs):
+        self.calls += 1
+        raise RuntimeError("Connection error.")
 
 
 class TripPlannerAgentTest(unittest.TestCase):
@@ -143,6 +154,70 @@ class TripPlannerAgentTest(unittest.TestCase):
         self.assertEqual(plan.city, "北京")
         self.assertEqual(len(plan.days), 1)
         self.assertEqual(plan.days[0].hotel.name, "北京千峋轻舍酒店")
+
+    def test_planner_request_kwargs_disable_response_format_for_deepseek(self) -> None:
+        self.planner.llm = _FakeLLM("{}", provider="deepseek", model="deepseek-chat")
+        kwargs = self.planner._planner_request_kwargs(max_tokens=4000, prefer_response_format=True)
+        self.assertEqual(kwargs["temperature"], 0.0)
+        self.assertEqual(kwargs["max_tokens"], 4000)
+        self.assertNotIn("response_format", kwargs)
+
+    def test_create_fallback_plan_uses_compressed_candidates(self) -> None:
+        attractions = "- 名称: 龙潭公园 | 地址: 龙潭路16号 | 理由: 湖景公园\n- 名称: 什刹海景区 | 地址: 地安门西大街49号 | 理由: 水域风光"
+        weather = "- 3月20日 | 天气: 晴转多云 | 温度: 1°C ~ 16°C | 风力: 东南风 1-3级\n- 3月21日 | 天气: 多云 | 温度: 7°C ~ 16°C | 风力: 南风 1-3级"
+        hotels = "- 名称: 北京千峋轻舍酒店 | 地址: 周口店镇周口村村委会西457米 | 类型: 酒店"
+        plan = self.planner._create_fallback_plan(self.request, attractions=attractions, weather=weather, hotels=hotels)
+        self.assertEqual(plan.city, "北京")
+        self.assertEqual(len(plan.days), 4)
+        self.assertEqual(plan.days[0].hotel.name, "北京千峋轻舍酒店")
+        self.assertIn(plan.days[0].attractions[0].name, {"龙潭公园", "什刹海景区"})
+        self.assertEqual(plan.weather_info[0].date, "2026-03-20")
+
+    def test_run_planner_with_retry_uses_single_attempt_for_deepseek(self) -> None:
+        self.planner.llm = _FakeLLM("{}", provider="deepseek", model="deepseek-chat")
+        self.planner.retry_attempts = 3
+        self.planner.retry_backoff_seconds = 0
+        self.planner.planner_agent = _AlwaysFailPlannerAgent()
+        with self.assertRaises(RuntimeError):
+            self.planner._run_planner_with_retry("test", "步骤4-行程生成")
+        self.assertEqual(self.planner.planner_agent.calls, 1)
+
+    def test_parse_compact_planner_response_builds_trip_plan(self) -> None:
+        compact = """
+{
+  "days": [
+    {
+      "date": "2026-03-20",
+      "day_index": 0,
+      "description": "游览龙潭公园和什刹海景区。",
+      "transportation": "公共交通",
+      "accommodation": "舒适型酒店",
+      "hotel_name": "北京千峋轻舍酒店",
+      "attraction_names": ["龙潭公园", "什刹海景区"],
+      "meals": [
+        {"type": "breakfast", "name": "酒店早餐", "description": "简餐"},
+        {"type": "lunch", "name": "北京家常菜", "description": "午餐"},
+        {"type": "dinner", "name": "烤鸭", "description": "晚餐"}
+      ]
+    }
+  ],
+  "overall_suggestions": "注意早晚温差，合理安排户外时间。"
+}
+"""
+        attractions = "- 名称: 龙潭公园 | 地址: 龙潭路16号 | 理由: 湖景公园\n- 名称: 什刹海景区 | 地址: 地安门西大街49号 | 理由: 水域风光"
+        weather = "- 3月20日 | 天气: 晴转多云 | 温度: 1°C ~ 16°C | 风力: 东南风 1-3级\n- 3月21日 | 天气: 多云 | 温度: 7°C ~ 16°C | 风力: 南风 1-3级"
+        hotels = "- 名称: 北京千峋轻舍酒店 | 地址: 周口店镇周口村村委会西457米 | 类型: 酒店"
+        plan = self.planner._parse_compact_planner_response(
+            compact,
+            self.request,
+            attractions=attractions,
+            weather=weather,
+            hotels=hotels,
+        )
+        self.assertEqual(plan.days[0].hotel.name, "北京千峋轻舍酒店")
+        self.assertEqual(plan.days[0].attractions[0].name, "龙潭公园")
+        self.assertEqual(plan.days[0].meals[2].name, "烤鸭")
+        self.assertEqual(plan.overall_suggestions, "注意早晚温差，合理安排户外时间。")
 
 
 if __name__ == "__main__":

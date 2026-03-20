@@ -10,6 +10,7 @@ export default defineConfig({
       '@': resolve(__dirname, 'src')
     }
   },
+  // @ts-ignore
   test: {
     environment: 'node',
     globals: true
@@ -19,7 +20,8 @@ export default defineConfig({
     proxy: {
       '/api': {
         target: 'http://localhost:8000',
-        changeOrigin: true
+        changeOrigin: true,
+        timeout: 600000  // 增加到10分钟
       }
     }
   }

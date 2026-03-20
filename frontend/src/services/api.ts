@@ -32,7 +32,7 @@ export class AppApiError extends Error {
 
 const apiClient = axios.create({
   baseURL: API_BASE_URL,
-  timeout: 300000, // 5分钟超时（LLM慢响应场景）
+  timeout: 600000, // 10分钟超时（LLM慢响应场景）
   headers: {
     'Content-Type': 'application/json'
   }
